@@ -957,46 +957,131 @@ namespace aspect
 
     template <int dim>
     void
-    StokesBoundaryTraction<dim>::execute (internal::Assembly::Scratch::ScratchBase<dim>   &scratch_base,
-                                          internal::Assembly::CopyData::CopyDataBase<dim> &data_base) const
+    StokesPrescribedContinuitySourceTerm<dim>::
+    execute (internal::Assembly::Scratch::ScratchBase<dim>   &scratch_base,
+             internal::Assembly::CopyData::CopyDataBase<dim> &data_base) const
     {
       internal::Assembly::Scratch::StokesSystem<dim> &scratch = dynamic_cast<internal::Assembly::Scratch::StokesSystem<dim>&> (scratch_base);
       internal::Assembly::CopyData::StokesSystem<dim> &data = dynamic_cast<internal::Assembly::CopyData::StokesSystem<dim>&> (data_base);
 
       const Introspection<dim> &introspection = this->introspection();
-      const FiniteElement<dim> &fe = scratch.finite_element_values.get_fe();
-
-      // see if any of the faces are traction boundaries for which
-      // we need to assemble force terms for the right hand side
+      const FiniteElement<dim> &fe = this->get_fe();
       const unsigned int stokes_dofs_per_cell = data.local_dof_indices.size();
+      const unsigned int n_q_points    = scratch.finite_element_values.n_quadrature_points;
+      const double pressure_scaling = this->get_pressure_scaling();
 
-      const typename DoFHandler<dim>::face_iterator face = scratch.cell->face(scratch.face_number);
+      Functions::ParsedFunction<dim> & function = this->get_parameters().prescribed_continuity_source_terms_function;
+      const Utilities::Coordinates::CoordinateSystem & coordinate_system = this->get_parameters().prescribed_continuity_source_terms_coordinate_system;
+      const double time = this->get_time();
 
-      const auto &traction_bis = this->get_boundary_traction_manager().get_prescribed_boundary_traction_indicators();
+      if (this->convert_output_to_years())
+        function.set_time (time / year_in_seconds);
+      else
+        function.set_time (time);
 
-      if (traction_bis.find(face->boundary_id()) != traction_bis.end())
+      for (unsigned int q=0; q<n_q_points; ++q)
         {
-          for (unsigned int q=0; q<scratch.face_finite_element_values.n_quadrature_points; ++q)
+          for (unsigned int i=0, i_stokes=0; i_stokes<stokes_dofs_per_cell; /*increment at end of loop*/)
             {
-              const Tensor<1,dim> traction
-                = this->get_boundary_traction_manager().
-                  boundary_traction (face->boundary_id(),
-                                     scratch.face_finite_element_values.quadrature_point(q),
-                                     scratch.face_finite_element_values.normal_vector(q));
-
-              const double JxW = scratch.face_finite_element_values.JxW(q);
-
-              for (unsigned int i=0, i_stokes=0; i_stokes<stokes_dofs_per_cell; /*increment at end of loop*/)
+              if (introspection.is_stokes_component(fe.system_to_component_index(i).first))
                 {
-                  if (introspection.is_stokes_component(fe.system_to_component_index(i).first))
-                    {
-                      data.local_rhs(i_stokes) += scratch.face_finite_element_values[introspection.extractors.velocities].value(i,q) *
-                                                  traction * JxW;
-                      ++i_stokes;
-                    }
-                  ++i;
+                  // scratch.phi_u[i_stokes] = scratch.finite_element_values[introspection.extractors.velocities].value (i,q);
+                  scratch.phi_p[i_stokes] = scratch.finite_element_values[introspection.extractors.pressure].value (i, q);
+                  // if (scratch.rebuild_stokes_matrix)
+                  //   {
+                  //     scratch.grads_phi_u[i_stokes] = scratch.finite_element_values[introspection.extractors.velocities].symmetric_gradient(i,q);
+                  //     scratch.div_phi_u[i_stokes]   = scratch.finite_element_values[introspection.extractors.velocities].divergence (i, q);
+                  //   }
+                  // else if (this->get_parameters().enable_elasticity)
+                  //   {
+                  //     scratch.grads_phi_u[i_stokes] = scratch.finite_element_values[introspection.extractors.velocities].symmetric_gradient(i,q);
+                  //   }
+                  ++i_stokes;
                 }
+              ++i;
             }
+
+
+          // // Viscosity scalar
+          // const double eta = ((scratch.rebuild_stokes_matrix || prescribed_dilation)
+          //                     ?
+          //                     scratch.material_model_outputs.viscosities[q]
+          //                     :
+          //                     numbers::signaling_nan<double>());
+          // const double one_over_eta = (scratch.rebuild_stokes_matrix
+          //                              &&
+          //                              this->get_parameters().use_equal_order_interpolation_for_stokes
+          //                              ?
+          //                              1./eta
+          //                              :
+          //                              numbers::signaling_nan<double>());
+
+          // const Tensor<1,dim>
+          // gravity = this->get_gravity_model().gravity_vector (scratch.finite_element_values.quadrature_point(q));
+
+          // const double density = scratch.material_model_outputs.densities[q];
+          const double JxW = scratch.finite_element_values.JxW(q);
+
+          for (unsigned int i=0; i<stokes_dofs_per_cell; ++i)
+            {
+              data.local_rhs(i) += function.value (scratch.finite_element_values.quadrature_point(q), coordinate_system) * scratch.phi_p[i] * JxW;
+              // data.local_rhs(i) += (density * gravity * scratch.phi_u[i])
+              //                      * JxW;
+
+              // if (force != nullptr && this->get_parameters().enable_additional_stokes_rhs)
+              //   data.local_rhs(i) += (force->rhs_u[q] * scratch.phi_u[i]
+              //                         + pressure_scaling * force->rhs_p[q] * scratch.phi_p[i])
+              //                        * JxW;
+
+              // if (elastic_outputs != nullptr && this->get_parameters().enable_elasticity)
+              //   data.local_rhs(i) += (elastic_outputs->elastic_force[q] * scratch.grads_phi_u[i])
+              //                        * JxW;
+
+              // if (prescribed_dilation != nullptr)
+              //   data.local_rhs(i) += (
+              //                          - pressure_scaling
+              //                          * prescribed_dilation->dilation_rhs_term[q]
+              //                          * scratch.phi_p[i]
+              //                        ) * JxW;
+
+              // if (scratch.rebuild_stokes_matrix)
+              //   for (unsigned int j=0; j<stokes_dofs_per_cell; ++j)
+              //     {
+              //       data.local_matrix(i,j) += ( (eta * 2.0 * (scratch.grads_phi_u[i] * scratch.grads_phi_u[j]))
+              //                                   // assemble \nabla p as -(p, div v):
+              //                                   - (pressure_scaling *
+              //                                      scratch.div_phi_u[i] * scratch.phi_p[j])
+              //                                   // assemble the term -div(u) as -(div u, q).
+              //                                   // Note the negative sign to make this
+              //                                   // operator adjoint to the grad p term:
+              //                                   - (pressure_scaling *
+              //                                      scratch.phi_p[i] * scratch.div_phi_u[j])
+              //                                   // assemble -\bar\alpha\alpha pq / eta^{ve}
+              //                                   // if plastic dilation is enabled
+              //                                   - (prescribed_dilation == nullptr ? 0.0 :
+              //                                      pressure_scaling * pressure_scaling *
+              //                                      prescribed_dilation->dilation_lhs_term[q] *
+              //                                      scratch.phi_p[i] * scratch.phi_p[j])
+              //                                 )
+              //                                 * JxW;
+              //     }
+            }
+
+          // If we are using the equal order Q1-Q1 element, then we also need
+          // to put the stabilization term into the (P,P) block of the matrix:
+          // if (scratch.rebuild_stokes_matrix
+          //     &&
+          //     this->get_parameters().use_equal_order_interpolation_for_stokes)
+          //   {
+          //     for (unsigned int i=0; i<stokes_dofs_per_cell; ++i)
+          //       for (unsigned int j=0; j<stokes_dofs_per_cell; ++j)
+          //         {
+          //           data.local_matrix(i,j) += ( - (one_over_eta * pressure_scaling * pressure_scaling *
+          //                                          (scratch.phi_p[i] - average_pressure_shape_function[i]) *
+          //                                          (scratch.phi_p[j] - average_pressure_shape_function[j])))
+          //                                     * JxW;
+          //         }
+          //   }
         }
     }
   }
@@ -1018,7 +1103,8 @@ namespace aspect
   template class StokesHydrostaticCompressionTerm<dim>; \
   template class StokesProjectedDensityFieldTerm<dim>; \
   template class StokesPressureRHSCompatibilityModification<dim>; \
-  template class StokesBoundaryTraction<dim>;
+  template class StokesBoundaryTraction<dim>; \
+  template class StokesPrescribedContinuitySourceTerm<dim>;
 
     ASPECT_INSTANTIATE(INSTANTIATE)
 

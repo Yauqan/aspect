@@ -136,6 +136,11 @@ namespace aspect
     if (do_pressure_rhs_compatibility_modification)
       assemblers->stokes_system.push_back(
         std::make_unique<aspect::Assemblers::StokesPressureRHSCompatibilityModification<dim>>());
+    
+    // Prescribed continuity source terms
+    if (parameters.use_prescribed_continuity_source_terms)
+      assemblers->stokes_system.push_back(
+        std::make_unique<aspect::Assemblers::StokesPrescribedContinuitySourceTerm<dim>>());
 
   }
 
