@@ -23,8 +23,10 @@
 #define _aspect_parameters_h
 
 #include <deal.II/base/parameter_handler.h>
+#include <deal.II/base/parsed_function.h>
 
 #include <aspect/global.h>
+#include <aspect/coordinate_systems.h>
 #include <aspect/material_model/interface.h>
 
 
@@ -866,6 +868,11 @@ namespace aspect
      * @}
      */
 
+
+    // Prescribed continuity source terms parameters
+    bool use_prescribed_continuity_source_terms;
+    mutable Functions::ParsedFunction<dim> prescribed_continuity_source_terms_function;
+    Utilities::Coordinates::CoordinateSystem prescribed_continuity_source_terms_coordinate_system;
 
   };
 

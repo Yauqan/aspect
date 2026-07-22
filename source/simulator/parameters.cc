@@ -45,6 +45,7 @@ namespace aspect
   }
 
 
+
   template <int dim>
   void
   Parameters<dim>::
@@ -391,6 +392,13 @@ namespace aspect
                        "this will only work if the material/heating model fills the reaction\\_rates/"
                        "heating\\_reaction\\_rates structures. Operator splitting can be used with any "
                        "existing solver schemes that solve the temperature/composition equations.");
+    
+    prm.declare_entry ("Use prescribed continuity source terms", "false",
+                       Patterns::Bool(),
+                       "If set to true, a new term on right hand side of the continuity equation is added. "
+                       "To prescribe the value for this term, use 'Prescribed continuity source term.Function', "
+                       "Units expected in that function are \\frac{\\text{kg}}{\\text{m}^2 \\text{s}} in 2D case and "
+                       "\\frac{\\text{kg}}{\\text{m}^3 \\text{s}} in 3D case.");
 
     prm.declare_entry ("World builder file", "",
                        Patterns::FileName(),
@@ -1518,6 +1526,27 @@ namespace aspect
     }
     prm.leave_subsection ();
 
+    prm.enter_subsection ("Prescribed continuity source terms");
+    {
+      prm.enter_subsection("Function");
+      {
+        prm.declare_entry ("Coordinate system", "cartesian",
+                            Patterns::Selection ("cartesian|spherical|depth"),
+                            "A selection that determines the assumed coordinate "
+                            "system for the function variables. Allowed values "
+                            "are `cartesian', `spherical', and `depth'. `spherical' coordinates "
+                            "are interpreted as r,phi or r,phi,theta in 2d/3d "
+                            "respectively with theta being the polar angle. `depth' "
+                            "will create a function, in which only the first "
+                            "parameter is non-zero, which is interpreted to "
+                            "be the depth of the point.");
+
+        Functions::ParsedFunction<dim>::declare_parameters (prm, 1);
+      }
+      prm.leave_subsection();
+    }
+    prm.leave_subsection ();
+
     // Finally declare a couple of parameters related how we should
     // evaluate the material models when assembling the matrix and
     // preconditioner
@@ -1782,6 +1811,8 @@ namespace aspect
     pressure_normalization          = prm.get("Pressure normalization");
 
     use_operator_splitting          = prm.get_bool("Use operator splitting");
+
+    use_prescribed_continuity_source_terms = prm.get_bool("Use prescribed continuity source terms");
 
     prm.enter_subsection ("Mesh refinement");
     {
@@ -2402,6 +2433,31 @@ namespace aspect
                                  "is not a valid name of a compositional field "
                                  "as specified in the <Compositional fields/Names of fields> parameter."));
         }
+    }
+    prm.leave_subsection ();
+
+    prm.enter_subsection ("Prescribed continuity source terms");
+    {
+      prm.enter_subsection("Function");
+      {
+        prescribed_continuity_source_terms_coordinate_system = Utilities::Coordinates::string_to_coordinate_system(prm.get("Coordinate system"));
+
+        try
+          {
+            prescribed_continuity_source_terms_function.parse_parameters (prm);
+          }
+        catch (...)
+          {
+            std::cerr << "ERROR: FunctionParser failed to parse\n"
+                      << "\t'Prescribed continuity source terms.Function'\n"
+                      << "with expression\n"
+                      << "\t'" << prm.get("Function expression") << "'"
+                      << "More information about the cause of the parse error \n"
+                      << "is shown below.\n";
+            throw;
+          }
+      }
+      prm.leave_subsection();
     }
     prm.leave_subsection ();
 
